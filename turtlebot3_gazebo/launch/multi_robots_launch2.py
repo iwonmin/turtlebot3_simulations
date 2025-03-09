@@ -2,14 +2,17 @@ import os
 import json
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, RegisterEventHandler, GroupAction
-from launch.substitutions import LaunchConfiguration
+from launch.actions import TimerAction, DeclareLaunchArgument, RegisterEventHandler, GroupAction
+from launch.substitutions import LaunchConfiguration, Command
 from launch.actions import IncludeLaunchDescription, ExecuteProcess
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from launch.event_handlers import OnProcessExit
 from launch.conditions import IfCondition
 import launch.logging
+import xacro
+import launch_ros
+
 
 def generate_launch_description():
     ld = LaunchDescription()
@@ -22,7 +25,7 @@ def generate_launch_description():
         model_folder,
         'model.sdf'
     )
-    urdf_file_name = 'turtlebot3_' + TURTLEBOT3_MODEL + '.urdf'
+    urdf_file_name = 'turtlebot3_waffle_pi_xacro.urdf'
     urdf_path = os.path.join(
         get_package_share_directory('turtlebot3_gazebo'),
         'urdf',
@@ -88,11 +91,11 @@ def generate_launch_description():
     robot_spawns = []
     first_robot = True
     for robot in robot_configs:
-        namespace = ['/' + robot['name']]
+        namespace = '/' + robot['name']
         x_pose = float(robot['x_pose'])
         y_pose = float(robot['y_pose'])
         z_pose = 0.01 
-
+        robot_desc = xacro.process_file(urdf_path, mappings={'robot_name': robot['name']}).toxml()
         state_publisher_node = Node(
             package='robot_state_publisher',
             executable='robot_state_publisher',
@@ -102,9 +105,12 @@ def generate_launch_description():
             parameters=[{
                 'use_sim_time': use_sim_time,
                 'robot_description': robot_desc,
-                'frame_prefix': str(robot['name'] + '/')
             }],
-            # remappings=remappings,
+            remappings=[
+                ("/tf", "tf"),
+                ("/tf_static", "tf_static"),
+                ("/robot_description", "robot_description")
+            ],
         )        
         
         spawn_robot = Node(
@@ -132,23 +138,30 @@ def generate_launch_description():
                 '-configuration_directory', cartographer_config_dir,
                 '-configuration_basename', str(f"{robot['name']}.lua")
             ],
-            # remappings=remappings
             remappings=[
-                ('/odom', 'odom')
+                ('/cmd_vel', f'{namespace}/cmd_vel'),
+                ('/odom', f'{namespace}/odom'),
+                ('/scan', f'{namespace}/scan'),
+                ('/imu', f'{namespace}/imu'),
+                ("/map", "/map"),
             ]
+        )
+        cartographer_node_delayed = TimerAction(
+            period=5.0,  # 5초 지연 후 시작
+            actions=[cartographer_node]
         )
         if first_robot is True:
 
             first_robot = False
             robot_group = GroupAction([
-                cartographer_node,
+                cartographer_node_delayed,
                 spawn_robot,
                 # octomap_node,
                 state_publisher_node
             ])
         else:
             robot_group = GroupAction([
-                cartographer_node,
+                cartographer_node_delayed,
                 spawn_robot,
                 state_publisher_node
             ])
